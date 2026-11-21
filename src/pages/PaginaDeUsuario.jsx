@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "../supabase/supabase";
 import { useNavigate, Link, useParams, replace } from "react-router-dom";
 import { envImagensStorage } from "../services/uploadImages";
+import { postImageStoragePath } from "../services/postImageStoragePath";
 import { ImageUp, FileText, Heart, Trash2, ExternalLink, LogOut } from 'lucide-react';
 import Navbar from "../layout/Navbar";
 import { CornerDownLeft } from 'lucide-react';
@@ -127,11 +128,34 @@ export default function PaginaDeUsuario(){
     }
     // função para excluir um post do proprio usuario
     async function excluirPost(id) {
-        // .select() devolve as linhas apagadas, se vier vazio o banco (RLS) n deixou apagar
-        const { data, error } = await supabase.from("posts").delete().eq("id", id).select()
+        if (!ehMeuPerfil) return
+        const { data: { user }, error: authError } = await supabase.auth.getUser()
+        if (authError || !user) {
+            alert("É necessário estar logado para excluir o post")
+            return
+        }
+        // Exige o dono também na consulta. RLS continua sendo a barreira no servidor.
+        const { data, error } = await supabase.from("posts")
+            .delete().eq("id", id).eq("id_user", user.id).select("imagens")
         if(error || !data || data.length === 0){
             alert("não foi possível excluir o post")
             return
+        }
+
+        // Só remove arquivos novos, salvos sob a pasta do usuário autenticado.
+        // URLs legadas sem dono comprovável não são excluídas automaticamente.
+        const storagePath = postImageStoragePath(
+            data[0]?.imagens, import.meta.env.VITE_SUPABASE_URL, user.id
+        )
+        if (storagePath) {
+            try {
+                const { error: storageError } = await supabase.storage
+                    .from("imagens-posts").remove([storagePath])
+                if (storageError) throw storageError
+            } catch (storageError) {
+                console.error("Falha ao remover a imagem do post", storageError)
+                alert("Post excluído, mas não foi possível remover a imagem do armazenamento.")
+            }
         }
         setConfirmandoId(null)
         setSaindoId(id)
